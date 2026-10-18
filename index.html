@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://www.youtube.com https://s.ytimg.com; frame-src https://www.youtube.com; style-src 'unsafe-inline'; img-src https://i.ytimg.com; connect-src https://www.youtube.com; base-uri 'none'; form-action 'none'">
+<title>Orbit YouTube Player 1.0</title>
+<style>html,body,#player{width:100%;height:100%;margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}body{overflow:hidden}#message{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;box-sizing:border-box}#message[hidden]{display:none}iframe{border:0;display:block}</style>
+</head>
+<body>
+<div id="message" role="status"></div><div id="player"></div>
+<script>
+'use strict';
+(() => {
+  const protocol = 'orbit-youtube-player-1';
+  const params = new URLSearchParams(location.hash.slice(1));
+  const languages = ['en','fr','zh-CN','de','it','ja','ko','ru','es'];
+  const lang = languages.includes(params.get('lang')) ? params.get('lang') : 'en';
+  const labels = {
+    en:['Select a video in Orbit.','Loading YouTube…','YouTube could not play this video.'],
+    fr:['Choisis une vidéo dans Orbit.','Chargement de YouTube…','YouTube ne peut pas lire cette vidéo.'],
+    'zh-CN':['请在 Orbit 中选择视频。','正在加载 YouTube…','YouTube 无法播放此视频。'],
+    de:['Wähle ein Video in Orbit.','YouTube wird geladen…','YouTube konnte dieses Video nicht abspielen.'],
+    it:['Scegli un video in Orbit.','Caricamento di YouTube…','YouTube non può riprodurre questo video.'],
+    ja:['Orbit で動画を選択してください。','YouTube を読み込み中…','YouTube でこの動画を再生できません。'],
+    ko:['Orbit에서 동영상을 선택하세요.','YouTube 로딩 중…','YouTube에서 이 동영상을 재생할 수 없습니다.'],
+    ru:['Выбери видео в Orbit.','Загрузка YouTube…','YouTube не удалось воспроизвести это видео.'],
+    es:['Elige un vídeo en Orbit.','Cargando YouTube…','YouTube no puede reproducir este vídeo.']
+  };
+  document.documentElement.lang = lang;
+  const message = document.getElementById('message');
+  const video = params.get('video') || '';
+  const channel = params.get('channel') || '';
+  let parentOrigin = '';
+  try {
+    const candidate = new URL(params.get('parent'));
+    if (candidate.protocol === 'http:' && ['127.0.0.1','localhost'].includes(candidate.hostname) && candidate.port === '28943' && candidate.href === candidate.origin + '/') parentOrigin = candidate.origin;
+  } catch {}
+  const embedded = parent !== window;
+  const linked = embedded && !!parentOrigin && /^[a-f0-9]{32,64}$/.test(channel);
+  const valid = /^[A-Za-z0-9_-]{11}$/.test(video) && (!embedded || linked);
+  let player, ready = false, disposed = false, timer;
+  function send(event, data = {}) {
+    if (linked && !disposed) parent.postMessage({protocol, channel, event, ...data}, parentOrigin);
+  }
+  function show(index) { message.textContent = labels[lang][index]; message.hidden = false; }
+  function status() {
+    if (!ready || disposed) return;
+    try {
+      const number = (value, max) => Number.isFinite(value) ? Math.max(0, Math.min(max, value)) : 0;
+      send('status', {state: player.getPlayerState(), currentTime:number(player.getCurrentTime(), 604800), duration:number(player.getDuration(),604800), volume:number(player.getVolume(),100), muted:!!player.isMuted(), videoId:video});
+    } catch {}
+  }
+  addEventListener('message', event => {
+    if (!linked || disposed || event.source !== parent || event.origin !== parentOrigin) return;
+    const data = event.data;
+    if (!data || data.protocol !== protocol || data.channel !== channel) return;
+    if (data.action === 'connect') { if (ready) {send('ready'); status();} return; }
+    if (!ready) return;
+    switch (data.action) {
+      case 'play': player.playVideo(); break;
+      case 'pause': player.pauseVideo(); break;
+      case 'volume':
+        if (typeof data.value !== 'number' || !Number.isFinite(data.value)) return;
+        const volume = Math.round(Math.max(0, Math.min(100, data.value)));
+        player.setVolume(volume);
+        if (volume === 0) player.mute(); else player.unMute();
+        break;
+      case 'seek':
+        if (typeof data.value !== 'number' || !Number.isFinite(data.value)) return;
+        const duration = player.getDuration();
+        if (duration > 0) player.seekTo(Math.max(0, Math.min(duration, data.value)), true);
+        break;
+      case 'state': status(); break;
+      case 'dispose':
+        player.pauseVideo(); player.destroy(); ready = false; disposed = true; clearInterval(timer); break;
+      default: return;
+    }
+    status();
+  });
+  addEventListener('pagehide', () => { disposed = true; clearInterval(timer); try {player?.destroy();} catch {} });
+  if (!valid) { show(0); return; }
+  show(1);
+  window.onYouTubeIframeAPIReady = () => {
+    if (disposed) return;
+    player = new YT.Player('player', {
+      width:'100%', height:'100%', videoId:video,
+      playerVars:{origin:location.origin, autoplay:0, playsinline:1, hl:lang},
+      events:{
+        onReady:() => { ready = true; message.hidden = true; send('ready'); status(); timer = setInterval(status,500); },
+        onStateChange:() => status(),
+        onError:event => { const code = Number(event.data); if (Number.isInteger(code)) send('error',{code}); }
+      }
+    });
+  };
+  const script = document.createElement('script');
+  script.src = 'https://www.youtube.com/iframe_api';
+  script.onerror = () => { show(2); send('error',{code:0}); };
+  document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>
